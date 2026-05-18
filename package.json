@@ -1,0 +1,27 @@
+{
+  "name": "clishot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "clishot": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "npx tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/__tests__/text.test.js dist/__tests__/layout.test.js dist/__tests__/cli.e2e.test.js",
+    "typecheck": "npx tsc -p tsconfig.json --noEmit",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.76",
+    "@fontsource/jetbrains-mono": "^5.2.6",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "typescript": "^5.8.3"
+  }
+}
