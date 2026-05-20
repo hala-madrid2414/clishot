@@ -3,4 +3,5 @@ dist/
 *.png
 *.jpg
 *.jpeg
-
+test-artifacts/**
+!test-artifacts/.gitkeep

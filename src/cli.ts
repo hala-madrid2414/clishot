@@ -4,10 +4,12 @@ import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { decodeInputBuffer } from "./input/encoding";
 import { renderTextToImages } from "./render/render";
 
 type CliOptions = {
   in?: string;
+  encoding: string;
   out: string;
   format: "png" | "jpg";
   theme: "terminal" | "paper";
@@ -20,12 +22,12 @@ type CliOptions = {
   jpgQuality: string;
 };
 
-async function readAllStdin(): Promise<string> {
+async function readAllStdin(): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
 }
 
 function parseIntOption(value: string, name: string): number {
@@ -61,6 +63,7 @@ async function main(): Promise<void> {
     .command("render")
     .description("从 stdin 或文件读取文本并渲染为图片")
     .option("--in <file>", "从文件读取文本")
+    .option("--encoding <name>", "输入编码（默认 auto，可显式指定 utf-8、utf-16le、gb18030 等）", "auto")
     .requiredOption("--out <path>", "输出文件路径或前缀（支持多页 name-001.ext）")
     .option("--format <png|jpg>", "输出格式", "png")
     .option("--theme <terminal|paper>", "主题", "terminal")
@@ -94,12 +97,20 @@ async function main(): Promise<void> {
       let inputText: string;
       if (options.in) {
         const absoluteIn = path.resolve(process.cwd(), options.in);
-        inputText = await readFile(absoluteIn, "utf8");
+        const inputBuffer = await readFile(absoluteIn);
+        inputText = decodeInputBuffer(inputBuffer, {
+          encoding: options.encoding,
+          sourceLabel: absoluteIn
+        }).text;
       } else {
         if (process.stdin.isTTY) {
           throw new Error(`未提供输入：请使用管道输入或指定 --in <file>`);
         }
-        inputText = await readAllStdin();
+        const inputBuffer = await readAllStdin();
+        inputText = decodeInputBuffer(inputBuffer, {
+          encoding: options.encoding,
+          sourceLabel: "stdin"
+        }).text;
       }
 
       const outputs = await renderTextToImages({

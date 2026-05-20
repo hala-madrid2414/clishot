@@ -1,0 +1,85 @@
+{
+  "generatedAt": "2026-05-20T00:56:13.354Z",
+  "repoRoot": "F:\\clishot",
+  "samplesDir": "F:\\clishot\\.trae\\specs\\fix-chinese-encoding\\repro\\samples",
+  "cases": {
+    "upstreamMojibake": {
+      "sample": "samples/mojibake-literal.txt",
+      "expectedRootCause": "输入已乱码",
+      "note": "文件内容本身已是错误字符，后续无论按 UTF-8 还是渲染图片都只能保留错误文本。",
+      "correctReference": {
+        "text": "中文测试\n",
+        "escaped": "\"中文测试\\n\"",
+        "codePoints": [
+          "U+4E2D",
+          "U+6587",
+          "U+6D4B",
+          "U+8BD5",
+          "U+A"
+        ]
+      },
+      "observed": {
+        "text": "ä¸­ææµè¯\n",
+        "escaped": "\"ä¸­ææµè¯\\n\"",
+        "codePoints": [
+          "U+E4",
+          "U+B8",
+          "U+AD",
+          "U+E6",
+          "U+96",
+          "U+87",
+          "U+E6",
+          "U+B5",
+          "U+8B",
+          "U+E8",
+          "U+AF",
+          "U+95",
+          "U+A"
+        ]
+      }
+    },
+    "decodeMismatch": {
+      "sample": "samples/utf16le-bom.txt",
+      "expectedRootCause": "读取编码错误",
+      "note": "Windows PowerShell 5 常见重定向文件为 UTF-16LE，当前实现固定按 UTF-8 读取。",
+      "observedWhenForcedUtf8": {
+        "text": "��-N�eKmՋ\n\u0000",
+        "escaped": "\"��-N�eKmՋ\\n\\u0000\"",
+        "codePoints": [
+          "U+FFFD",
+          "U+FFFD",
+          "U+2D",
+          "U+4E",
+          "U+FFFD",
+          "U+65",
+          "U+4B",
+          "U+6D",
+          "U+54B",
+          "U+A",
+          "U+0"
+        ]
+      }
+    },
+    "missingGlyphs": {
+      "sample": "samples/font-missing.txt",
+      "expectedRootCause": "字体缺失",
+      "note": "对多个中文字符单独栅格化后得到相同图像哈希，说明当前字体链没有为这些字符提供可区分的中文字形。",
+      "fontFamilyCss": "\"JetBrains Mono\",\"Cascadia Mono\",Consolas,Menlo,Monaco,\"DejaVu Sans Mono\",\"Courier New\",monospace",
+      "glyphHashes": {
+        "中": "63b5e19f6e759e06ce4ac53091d9c28f737328ee",
+        "文": "63b5e19f6e759e06ce4ac53091d9c28f737328ee",
+        "测": "63b5e19f6e759e06ce4ac53091d9c28f737328ee",
+        "□": "cb5f0514ffd6147ea7f8a24b61a947e0a4cb8849",
+        "?": "b2a44c1a868f37692a31437dbab14548b524f451",
+        "�": "63b5e19f6e759e06ce4ac53091d9c28f737328ee",
+        "": "547372f1044a3442aa52fcd2b3546540aba59344",
+        "A": "8136bd10f7b23bc2c8acb89c45b640d7b6913769"
+      },
+      "chineseGlyphsCollapseToSameHash": true,
+      "chineseGlyphMatchesBox": false,
+      "chineseGlyphMatchesQuestionMark": false,
+      "chineseGlyphMatchesReplacementChar": true,
+      "chineseGlyphMatchesBlank": false
+    }
+  }
+}

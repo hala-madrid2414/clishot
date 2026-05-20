@@ -1,0 +1,139 @@
+# 测试产物基线文档
+
+## 测试目标
+
+- 建立统一的 `test-artifacts/` 目录约定，集中保存人工验收所需的输入样本与截图产物。
+- 覆盖 MVP 关键路径：`stdin` 输入、`--in <file>` 输入、多页输出、`terminal` / `paper` 主题、PNG / JPG 格式。
+- 补充中文场景回归：覆盖 UTF-8 中文输入、PowerShell 5 常见 UTF-16LE 重定向输入，以及 `--encoding` 显式指定示例。
+- 为后续人工回归提供可定位的产物路径和明确的验收依据。
+
+## 中文乱码说明
+
+中文相关问题一般分为 3 类：
+
+- 输入源已乱码：采集阶段就写成了 `ä¸­æ` 之类的错误文本，这种情况需要重采，渲染阶段无法恢复原文。
+- 读取编码不匹配：最典型的是 PowerShell 5 的文件常为 UTF-16LE，而读取方误按 UTF-8 解码。
+- 字体缺失：文件内容正常，但图片里显示成方框、空白或统一缺字 glyph。
+
+本项目当前的回归重点是验证后两类问题：
+
+- `clishot render --in` 默认自动识别 UTF-8 / UTF-16LE / UTF-16BE 等常见输入。
+- 渲染阶段启用中文字体回退链，保证中文在 `terminal` / `paper` 主题下基本可读。
+
+## 测试内容
+
+| 场景 | 输入方式 | 主题 | 格式 | 产物路径 |
+| --- | --- | --- | --- | --- |
+| stdin 单页输出 | stdin 管道输入 | `terminal` | `png` | `test-artifacts/baseline/stdin/stdin-terminal.png` |
+| 文件单页输出 | `--in test-artifacts/inputs/file-input.txt` | `paper` | `jpg` | `test-artifacts/baseline/file/file-paper.jpg` |
+| 多页输出 | `--in test-artifacts/inputs/multi-page-input.txt` | `paper` | `png` | `test-artifacts/baseline/multi-page/multi-page-paper-001.png` 至 `test-artifacts/baseline/multi-page/multi-page-paper-006.png` |
+| UTF-8 中文输入 | `--in test-artifacts/inputs/chinese-utf8.txt` | `terminal` | `png` | `test-artifacts/baseline/chinese/chinese-utf8-terminal.png` |
+| PowerShell 5 UTF-16LE 输入 | `--in test-artifacts/inputs/chinese-utf16le-ps5.txt` | `paper` | `png` | `test-artifacts/baseline/chinese/chinese-utf16le-paper.png` |
+| 显式指定编码 | `--in test-artifacts/inputs/chinese-utf16le-ps5.txt --encoding utf-16le` | `terminal` | `png` | `test-artifacts/baseline/chinese/chinese-utf16le-explicit.png` |
+
+## 验收标准
+
+| 场景 | 验收标准 |
+| --- | --- |
+| stdin 单页输出 | 命令退出码为 `0`；CLI stdout 返回 1 个输出路径；目标 PNG 文件存在。 |
+| 文件单页输出 | 命令退出码为 `0`；CLI stdout 返回 1 个输出路径；目标 JPG 文件存在。 |
+| 多页输出 | 命令退出码为 `0`；CLI stdout 返回多个输出路径；输出文件按 `-001` 递增命名；所有分页文件存在。 |
+| UTF-8 中文输入 | 输出图片中的中文“中文输入验证”“第二行 mixed 123”可读，无 `ä¸­æ`、`??`、`�` 等乱码。 |
+| PowerShell 5 UTF-16LE 输入 | 输出图片中的“PowerShell 5 重定向”“中文 UTF-16LE”可读，无解码错位。 |
+| 显式指定编码 | 对 UTF-16LE 样本追加 `--encoding utf-16le` 后仍可正常出图，可作为自动识别失败时的排查手段。 |
+| 主题覆盖 | 基线产物至少覆盖 `terminal` 与 `paper` 两种主题。 |
+| 格式覆盖 | 基线产物至少覆盖 `png` 与 `jpg` 两种格式。 |
+| Git 忽略 | 生成截图后执行 `git status --short --ignored test-artifacts`；`baseline/` 与 `inputs/` 显示为已忽略，截图与输入样本不进入待提交列表。 |
+
+## 测试命令
+
+```powershell
+npm run build
+
+New-Item -ItemType Directory -Force test-artifacts, test-artifacts\inputs, test-artifacts\baseline, test-artifacts\baseline\stdin, test-artifacts\baseline\file, test-artifacts\baseline\multi-page, test-artifacts\baseline\chinese | Out-Null
+
+@'
+clishot baseline via file
+status: ok
+theme: paper
+'@ | Set-Content -Path test-artifacts/inputs/file-input.txt -Encoding utf8
+
+$multiPageLines = 1..42 | ForEach-Object { "line {0:D2} -> multi page baseline" -f $_ }
+$multiPageLines | Set-Content -Path test-artifacts/inputs/multi-page-input.txt -Encoding utf8
+
+@'
+clishot baseline via stdin
+status: ok
+columns check -> terminal png
+'@ | node dist/cli.js render --out test-artifacts/baseline/stdin/stdin-terminal.png --format png --theme terminal --cols 40 --rows 10
+
+node dist/cli.js render --in test-artifacts/inputs/file-input.txt --out test-artifacts/baseline/file/file-paper.jpg --format jpg --theme paper --cols 48 --rows 10 --jpg-quality 85
+
+node dist/cli.js render --in test-artifacts/inputs/multi-page-input.txt --out test-artifacts/baseline/multi-page/multi-page-paper.png --format png --theme paper --cols 42 --rows 8
+
+@'
+中文输入验证
+第二行 mixed 123
+'@ | Set-Content -Path test-artifacts/inputs/chinese-utf8.txt -Encoding utf8
+
+@'
+PowerShell 5 重定向
+中文 UTF-16LE
+'@ | Out-File -FilePath test-artifacts/inputs/chinese-utf16le-ps5.txt -Encoding Unicode
+
+node dist/cli.js render --in test-artifacts/inputs/chinese-utf8.txt --out test-artifacts/baseline/chinese/chinese-utf8-terminal.png --format png --theme terminal --cols 24 --rows 6
+
+node dist/cli.js render --in test-artifacts/inputs/chinese-utf16le-ps5.txt --out test-artifacts/baseline/chinese/chinese-utf16le-paper.png --format png --theme paper --cols 24 --rows 6
+
+node dist/cli.js render --in test-artifacts/inputs/chinese-utf16le-ps5.txt --encoding utf-16le --out test-artifacts/baseline/chinese/chinese-utf16le-explicit.png --format png --theme terminal --cols 24 --rows 6
+```
+
+PowerShell 7 如果需要先落盘再渲染，推荐改用 UTF-8：
+
+```powershell
+@'
+PowerShell 7 UTF-8
+中文采集
+'@ | Set-Content -Path test-artifacts/inputs/chinese-utf8-ps7.txt -Encoding utf8
+
+node dist/cli.js render --in test-artifacts/inputs/chinese-utf8-ps7.txt --out test-artifacts/baseline/chinese/chinese-utf8-ps7.png --format png --theme terminal --cols 24 --rows 6
+```
+
+## 测试结果
+
+| 场景 | 结果 | 依据 |
+| --- | --- | --- |
+| stdin 单页输出 | 通过 | 命令成功生成 `test-artifacts/baseline/stdin/stdin-terminal.png`。 |
+| 文件单页输出 | 通过 | 命令成功生成 `test-artifacts/baseline/file/file-paper.jpg`。 |
+| 多页输出 | 通过 | 命令成功生成 `multi-page-paper-001.png` 到 `multi-page-paper-006.png`，分页命名符合约定。 |
+| UTF-8 中文输入 | 通过 | 命令成功生成 `test-artifacts/baseline/chinese/chinese-utf8-terminal.png`，中文内容可读。 |
+| PowerShell 5 UTF-16LE 输入 | 通过 | 命令成功生成 `test-artifacts/baseline/chinese/chinese-utf16le-paper.png`，中文内容可读。 |
+| 显式指定编码 | 通过 | 命令成功生成 `test-artifacts/baseline/chinese/chinese-utf16le-explicit.png`，可作为自动识别回退方案。 |
+| 主题覆盖 | 通过 | `stdin` 场景使用 `terminal`，文件与多页场景使用 `paper`。 |
+| 格式覆盖 | 通过 | 已生成 `png` 与 `jpg` 两种格式，中文基线补充了 `png` 截图。 |
+| Git 忽略 | 通过 | `git status --short --ignored test-artifacts` 显示 `baseline/`、`inputs/`（以及存在时的 `manual/`）为已忽略，说明截图与输入样本不会进入待提交列表。 |
+
+## 排查步骤
+
+1. 先检查原始文件内容是否已经乱码；如果文件内已经出现 `ä¸­æ`、`????` 或 `�`，先回到 PowerShell 采集步骤重新生成。
+2. 如果文件内容正常但渲染异常，优先尝试 `--encoding utf-8` 或 `--encoding utf-16le` 重新运行。
+3. 如果文字内容顺序正常但显示成方框/缺字，检查系统是否安装了 `Microsoft YaHei UI`、`Microsoft YaHei`、`DengXian` 等常见中文字体。
+4. 用 `test-artifacts/baseline/chinese/` 下的截图与当前输出对照，确认差异发生在采集、解码还是字体阶段。
+
+## 目录约定
+
+```text
+test-artifacts/
+  .gitkeep
+  baseline/
+    stdin/
+    file/
+    multi-page/
+    chinese/
+  inputs/
+```
+
+## 备注
+
+- `test-artifacts/inputs/` 保存本次人工验收使用的输入样本。
+- `test-artifacts/baseline/` 按测试场景拆分输出，便于后续人工对照和补充更多基线截图。

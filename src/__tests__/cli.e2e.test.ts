@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { createCanvas } from "@napi-rs/canvas";
+import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
+import { layoutTextToPages } from "../render/layout";
+import { renderPageToCanvas, encodeCanvasToBuffer } from "../render/raster";
+import { getTheme, type ThemeName } from "../render/theme";
+import { cleanTextForRender } from "../render/text";
 import { ensureFontReady } from "../render/typography";
 
 type CliRunResult = {
@@ -99,6 +104,74 @@ async function runCli(args: string[], stdinText?: string): Promise<CliRunResult>
   return { code, stdout, stderr };
 }
 
+function sha256(buf: Buffer): string {
+  return createHash("sha256").update(buf).digest("hex");
+}
+
+function parseOutputPaths(stdout: string): string[] {
+  return stdout
+    .trim()
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function renderTextHash(options: {
+  text: string;
+  theme: ThemeName;
+  fontFamilyCss?: string;
+}): Promise<string> {
+  const typography = await ensureFontReady();
+  const canvas = renderPageToCanvas({
+    lines: [options.text],
+    cols: Math.max(4, options.text.length * 2),
+    rows: 1,
+    theme: getTheme(options.theme),
+    typography: {
+      fontFamilyCss: options.fontFamilyCss ?? typography.fontFamilyCss
+    },
+    fontSize: 32,
+    lineHeight: 1.35,
+    margin: 16
+  });
+
+  const png = await encodeCanvasToBuffer(canvas, { format: "png", jpgQuality: 85 });
+  return sha256(png);
+}
+
+async function renderFirstPagePngHash(options: {
+  inputText: string;
+  theme: ThemeName;
+  cols: number;
+  rows: number;
+  fontSize?: number;
+  lineHeight?: number;
+  margin?: number;
+  tabStop?: number;
+}): Promise<string> {
+  const fontSize = options.fontSize ?? 16;
+  const lineHeight = options.lineHeight ?? 1.35;
+  const margin = options.margin ?? 24;
+  const tabStop = options.tabStop ?? 4;
+  const typography = await ensureFontReady();
+  const cleaned = cleanTextForRender(options.inputText, { tabStop });
+  const pages = layoutTextToPages(cleaned, { cols: options.cols, rows: options.rows });
+  assert.equal(pages.length, 1, "测试样本应控制为单页，避免哈希对比掺入分页差异");
+
+  const canvas = renderPageToCanvas({
+    lines: pages[0]!,
+    cols: options.cols,
+    rows: options.rows,
+    theme: getTheme(options.theme),
+    typography,
+    fontSize,
+    lineHeight,
+    margin
+  });
+  const png = await encodeCanvasToBuffer(canvas, { format: "png", jpgQuality: 85 });
+  return sha256(png);
+}
+
 test("CLI E2E: stdin -> 输出 PNG 文件存在且尺寸正确", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "clishot-"));
   const outFile = path.join(dir, "stdin.png");
@@ -134,11 +207,7 @@ test("CLI E2E: stdin -> 输出 PNG 文件存在且尺寸正确", async () => {
 
   assert.equal(result.code, 0, result.stderr);
 
-  const outputs = result.stdout
-    .trim()
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const outputs = parseOutputPaths(result.stdout);
   assert.equal(outputs.length, 1);
   assert.equal(path.normalize(outputs[0]!), path.normalize(outFile));
 
@@ -185,11 +254,7 @@ test("CLI E2E: stdin -> 输出 JPG 文件存在且尺寸正确", async () => {
 
   assert.equal(result.code, 0, result.stderr);
 
-  const outputs = result.stdout
-    .trim()
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const outputs = parseOutputPaths(result.stdout);
   assert.equal(outputs.length, 1);
   assert.equal(path.normalize(outputs[0]!), path.normalize(outFile));
 
@@ -227,11 +292,7 @@ test("CLI E2E: --in 文件 -> 多页命名正确且页数符合预期", async ()
 
   assert.equal(result.code, 0, result.stderr);
 
-  const outputs = result.stdout
-    .trim()
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const outputs = parseOutputPaths(result.stdout);
 
   assert.equal(outputs.length, 3);
 
@@ -249,4 +310,185 @@ test("CLI E2E: --in 文件 -> 多页命名正确且页数符合预期", async ()
     assert.equal(size.width > 0, true);
     assert.equal(size.height > 0, true);
   }
+});
+
+test("CLI E2E: 中文字体回退在 terminal/paper 主题下可区分真实中文 glyph", async () => {
+  for (const theme of ["terminal", "paper"] as const) {
+    const replacementHash = await renderTextHash({ text: "�", theme });
+    const middleHash = await renderTextHash({ text: "中", theme });
+    const textHash = await renderTextHash({ text: "文", theme });
+
+    assert.notEqual(middleHash, replacementHash, `${theme} 主题下“中”仍退化为缺字 glyph`);
+    assert.notEqual(textHash, replacementHash, `${theme} 主题下“文”仍退化为缺字 glyph`);
+    assert.notEqual(middleHash, textHash, `${theme} 主题下中文字符仍被渲染成相同 glyph`);
+  }
+});
+
+test("CLI E2E: 英文仍优先使用 JetBrains Mono", async () => {
+  const typography = await ensureFontReady();
+  assert.match(typography.fontFamilyCss, /^"JetBrains Mono"/);
+  assert.equal(GlobalFonts.has("JetBrains Mono"), true);
+
+  const fullChainHash = await renderTextHash({
+    text: "Hello, clishot 123",
+    theme: "terminal"
+  });
+  const jetbrainsHash = await renderTextHash({
+    text: "Hello, clishot 123",
+    theme: "terminal",
+    fontFamilyCss: `"JetBrains Mono"`
+  });
+
+  assert.equal(fullChainHash, jetbrainsHash);
+});
+
+test("CLI E2E: UTF-8 中文文件输入可按原文渲染", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clishot-"));
+  const inFile = path.join(dir, "utf8-chinese.txt");
+  const outFile = path.join(dir, "utf8-chinese.png");
+  const inputText = "中文输入验证\n第二行 mixed 123\n";
+  const cols = 24;
+  const rows = 6;
+  await writeFile(inFile, inputText, "utf8");
+
+  const result = await runCli([
+    "render",
+    "--in",
+    inFile,
+    "--out",
+    outFile,
+    "--format",
+    "png",
+    "--theme",
+    "terminal",
+    "--cols",
+    String(cols),
+    "--rows",
+    String(rows)
+  ]);
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(parseOutputPaths(result.stdout).map((p) => path.normalize(p)), [
+    path.normalize(outFile)
+  ]);
+
+  const expectedHash = await renderFirstPagePngHash({
+    inputText,
+    theme: "terminal",
+    cols,
+    rows
+  });
+  const actualHash = sha256(await readFile(outFile));
+  assert.equal(actualHash, expectedHash, "UTF-8 中文文件渲染结果与原文基线不一致");
+});
+
+test("CLI E2E: PowerShell 5 常见 UTF-16LE 重定向文件可自动识别", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clishot-"));
+  const inFile = path.join(dir, "utf16le-bom.txt");
+  const outFile = path.join(dir, "utf16le-bom.png");
+  const inputText = "PowerShell 5 重定向\n中文 UTF-16LE\n";
+  const cols = 24;
+  const rows = 6;
+  const bom = Buffer.from([0xff, 0xfe]);
+  const body = Buffer.from(inputText, "utf16le");
+  await writeFile(inFile, Buffer.concat([bom, body]));
+
+  const result = await runCli([
+    "render",
+    "--in",
+    inFile,
+    "--out",
+    outFile,
+    "--format",
+    "png",
+    "--theme",
+    "terminal",
+    "--cols",
+    String(cols),
+    "--rows",
+    String(rows)
+  ]);
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(parseOutputPaths(result.stdout).map((p) => path.normalize(p)), [
+    path.normalize(outFile)
+  ]);
+
+  const expectedHash = await renderFirstPagePngHash({
+    inputText,
+    theme: "terminal",
+    cols,
+    rows
+  });
+  const actualHash = sha256(await readFile(outFile));
+  assert.equal(actualHash, expectedHash, "UTF-16LE 自动识别后的渲染结果与原文基线不一致");
+});
+
+test("CLI E2E: --encoding utf-16le 可显式读取无 BOM 文件", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clishot-"));
+  const inFile = path.join(dir, "utf16le-no-bom.txt");
+  const outFile = path.join(dir, "utf16le-no-bom.png");
+  await writeFile(inFile, Buffer.from("中文测试\n", "utf16le"));
+
+  const result = await runCli([
+    "render",
+    "--in",
+    inFile,
+    "--encoding",
+    "utf-16le",
+    "--out",
+    outFile,
+    "--format",
+    "png",
+    "--theme",
+    "terminal",
+    "--cols",
+    "20",
+    "--rows",
+    "4"
+  ]);
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(path.normalize(result.stdout.trim()), path.normalize(outFile));
+});
+
+test("CLI E2E: 非法 --encoding 返回可读错误", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clishot-"));
+  const inFile = path.join(dir, "input.txt");
+  const outFile = path.join(dir, "invalid-encoding.png");
+  await writeFile(inFile, "中文测试\n", "utf8");
+
+  const result = await runCli([
+    "render",
+    "--in",
+    inFile,
+    "--encoding",
+    "not-a-real-encoding",
+    "--out",
+    outFile
+  ]);
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /--encoding "not-a-real-encoding" 无效/);
+});
+
+test("CLI E2E: 解码失败时返回可读错误", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "clishot-"));
+  const inFile = path.join(dir, "invalid-utf8.bin");
+  const outFile = path.join(dir, "decode-error.png");
+  await writeFile(inFile, Buffer.from([0xff, 0xfe, 0x87, 0x65, 0x4b, 0x6d, 0xd5]));
+
+  const result = await runCli([
+    "render",
+    "--in",
+    inFile,
+    "--encoding",
+    "utf-8",
+    "--out",
+    outFile
+  ]);
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /无法按 utf-8 解码输入文件/);
+  assert.match(result.stderr, /可用示例：utf-8、utf-16le、gb18030/);
 });
